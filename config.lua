@@ -16,6 +16,7 @@ sleepPreventSchedule = {
 }
 
 applist = {
+    {shortcut = 'C',appname = 'Codex'},
     {shortcut = 'G',appname = 'Google Chrome'},
     {shortcut = 'E',appname = 'Microsoft Edge'},
     {shortcut = 'A',appname = 'Antigravity'},
