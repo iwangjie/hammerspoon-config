@@ -1,77 +1,110 @@
--- 系统休眠控制
-local function preventSystemSleep()
+local menubar = hs.menubar.new()
+
+local function hasWeekday(weekday)
+    for _, enabledWeekday in ipairs((sleepPreventSchedule or {}).weekdays or {}) do
+        if weekday == enabledWeekday then
+            return true
+        end
+    end
+
+    return false
+end
+
+local function previousWeekday(weekday)
+    if weekday == 1 then
+        return 7
+    end
+
+    return weekday - 1
+end
+
+local function minutes(hour, minute)
+    return hour * 60 + minute
+end
+
+local function isScheduledTime(timestamp)
     local schedule = sleepPreventSchedule
     if not schedule or not schedule.enabled then
-        hs.caffeinate.set("system", false)
-        return
+        return false
     end
 
-    -- 获取本地时间
-    local date = os.date("*t")
-    -- 转换星期显示为更直观的格式
-    local weekdays = {"日", "一", "二", "三", "四", "五", "六"}
-    print(string.format("本地时间: %02d:%02d (星期%s)", date.hour, date.min, weekdays[date.wday]))
+    local date = os.date("*t", timestamp)
+    local currentMinutes = minutes(date.hour, date.min)
+    local startMinutes = minutes(schedule.startHour, schedule.startMinute)
+    local endMinutes = minutes(schedule.endHour, schedule.endMinute)
 
-    local scheduleWeekday = false
-    for _, weekday in ipairs(schedule.weekdays or {}) do
-        if date.wday == weekday then
-            scheduleWeekday = true
-            break
-        end
+    if startMinutes <= endMinutes then
+        return hasWeekday(date.wday)
+            and currentMinutes >= startMinutes
+            and currentMinutes < endMinutes
     end
 
-    if scheduleWeekday then
-        -- 转换当前时间为分钟
-        local currentMinutes = date.hour * 60 + date.min
-        local startMinutes = schedule.startHour * 60 + schedule.startMinute
-        local endMinutes = schedule.endHour * 60 + schedule.endMinute
-        
-        print(string.format("当前分钟数: %d, 开始时间: %d, 结束时间: %d", 
-            currentMinutes, startMinutes, endMinutes))
-        
-        -- 由于跨天，需要特殊处理时间判断
-        local isWorkTime = false
-        if currentMinutes >= startMinutes then
-            -- 晚上 9:30 之后
-            isWorkTime = true
-        elseif currentMinutes <= endMinutes then
-            -- 凌晨 5:00 之前
-            isWorkTime = true
-        end
-        
-        if isWorkTime then
-            print("在工作时间内 - 阻止休眠")
-            hs.caffeinate.set("system", true)
-        else
-            print("不在工作时间内 - 允许休眠")
-            hs.caffeinate.set("system", false)
-        end
+    return (hasWeekday(date.wday) and currentMinutes >= startMinutes)
+        or (hasWeekday(previousWeekday(date.wday)) and currentMinutes < endMinutes)
+end
+
+local function setMenuIcon()
+    if not menubar then return end
+
+    if hs.caffeinate.get("system") then
+        menubar:setTitle("🟢")
     else
-        print("不是工作日 - 允许休眠")
-        hs.caffeinate.set("system", false)
+        menubar:setTitle("⭕️")
     end
 end
 
--- 每分钟检查一次
-caffeineTimer = hs.timer.doEvery(60, preventSystemSleep)
+local function applySleepState()
+    hs.caffeinate.set("system", isScheduledTime(os.time()))
+    setMenuIcon()
+end
 
--- 立即运行一次
-preventSystemSleep()
+local function candidateTime(baseDate, dayOffset, hour, minute)
+    return os.time({
+        year = baseDate.year,
+        month = baseDate.month,
+        day = baseDate.day + dayOffset,
+        hour = hour,
+        min = minute,
+        sec = 0,
+    })
+end
 
--- 添加菜单栏图标显示状态
-local menubar = hs.menubar.new()
+local function nextBoundaryDelay()
+    local schedule = sleepPreventSchedule
+    if not schedule or not schedule.enabled then
+        return nil
+    end
 
-local function setMenuIcon()
-    if hs.caffeinate.get("system") then
-        menubar:setTitle("🟢")  -- 系统防休眠开启
-    else
-        menubar:setTitle("⭕️")  -- 系统防休眠关闭
+    local now = os.time()
+    local baseDate = os.date("*t", now)
+    local currentState = isScheduledTime(now)
+
+    for dayOffset = 0, 8 do
+        for _, boundary in ipairs({
+            {hour = schedule.startHour, minute = schedule.startMinute},
+            {hour = schedule.endHour, minute = schedule.endMinute},
+        }) do
+            local timestamp = candidateTime(baseDate, dayOffset, boundary.hour, boundary.minute)
+            if timestamp > now and isScheduledTime(timestamp + 1) ~= currentState then
+                return timestamp - now
+            end
+        end
+    end
+
+    return nil
+end
+
+local function scheduleNextBoundary()
+    applySleepState()
+
+    local delay = nextBoundaryDelay()
+    if delay then
+        caffeineTimer = hs.timer.doAfter(delay, scheduleNextBoundary)
     end
 end
 
 if menubar then
     menubar:setTooltip("系统防休眠状态")
-    setMenuIcon()
-    -- 每分钟更新图标状态
-    caffeineMenubarTimer = hs.timer.doEvery(60, setMenuIcon)
 end
+
+scheduleNextBoundary()

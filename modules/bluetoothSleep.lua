@@ -1,14 +1,18 @@
-local function blueutilPath()
-    local candidates = {
-        "/opt/homebrew/bin/blueutil",
-        "/usr/local/bin/blueutil",
-    }
+local cachedBlueutilPath = nil
 
-    for _, path in ipairs(candidates) do
+local function blueutilPath()
+    if cachedBlueutilPath ~= nil then
+        return cachedBlueutilPath
+    end
+
+    for _, path in ipairs({"/opt/homebrew/bin/blueutil", "/usr/local/bin/blueutil"}) do
         if hs.fs.attributes(path) then
+            cachedBlueutilPath = path
             return path
         end
     end
+
+    cachedBlueutilPath = false
 end
 
 local function bluetoothSwitch(state)

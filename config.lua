@@ -1,6 +1,7 @@
 windowHotkey = {'control','command'}
 launcherHotkey = {'option'}
 inputHotkey = {'option'}
+workWifis = {'jishufuwuqi', 'SBY'}
 workWifi = nil
 outputDeviceName = 'MacBook Pro扬声器'
 englishInputSourceID = 'com.apple.keylayout.ABC'

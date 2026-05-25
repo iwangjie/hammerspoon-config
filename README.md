@@ -49,8 +49,8 @@ brew install blueutil
 
 ### 连接公司 Wi-Fi 自动静音
 
-修改配置文件中的 `workWifi` 为公司 Wi-Fi 名称。如果为空，则不会启用自动静音。当前内置输出设备名为 `MacBook Pro扬声器`。
+修改配置文件中的 `workWifis` 为公司 Wi-Fi 名称列表。如果为空，则不会启用自动静音。当前配置为 `jishufuwuqi` 和 `SBY`，并且只会在当前输出设备为 `MacBook Pro扬声器` 时静音。
 
 ### 定时防休眠
 
-`sleepPreventSchedule` 控制系统防休眠时间段。当前配置为工作日 21:30 到次日 05:00 防休眠，并在菜单栏显示状态。
+`sleepPreventSchedule` 控制系统防休眠时间段。当前配置为工作日 21:30 到次日 05:00 防休眠，并在菜单栏显示状态。实现上只在下一次时间边界触发，不做每分钟轮询。
