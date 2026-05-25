@@ -1,16 +1,24 @@
 local function Chinese()
-    -- hs.keycodes.currentSourceID("com.apple.inputmethod.SCIM.ITABC")
-    hs.keycodes.currentSourceID("com.tencent.inputmethod.wetype.pinyin")
-    -- hs.keycodes.currentSourceID("com.sogou.inputmethod.sogou.pinyin")
+    if chineseInputSourceID then
+        hs.keycodes.currentSourceID(chineseInputSourceID)
+    end
 end
 
 local function English()
-    hs.keycodes.currentSourceID("com.apple.keylayout.ABC")
+    if englishInputSourceID then
+        hs.keycodes.currentSourceID(englishInputSourceID)
+    end
 end
 
-function updateFocusAppInputMethod()
-    local focusAppPath = hs.window.frontmostWindow():application():path()
-    for index, app in pairs(appInputMethod) do
+local function updateFocusAppInputMethod()
+    local win = hs.window.frontmostWindow()
+    if not win then return end
+
+    local appObject = win:application()
+    if not appObject then return end
+
+    local focusAppPath = appObject:path()
+    for _, app in pairs(appInputMethod) do
         local appPath = app[1]
         local expectedIme = app[2]
 
@@ -27,18 +35,24 @@ end
 
 -- helper hotkey to figure out the app path and name of current focused window
 hs.hotkey.bind({'ctrl', 'cmd'}, ".", function()
+    local win = hs.window.focusedWindow()
+    if not win then return end
+
+    local appObject = win:application()
+    if not appObject then return end
+
     hs.alert.show("App path:        "
-    ..hs.window.focusedWindow():application():path()
+    ..appObject:path()
     .."\n"
     .."App name:      "
-    ..hs.window.focusedWindow():application():name()
+    ..appObject:name()
     .."\n"
     .."IM source id:  "
     ..hs.keycodes.currentSourceID())
 end)
 
 -- Handle cursor focus and application's screen manage.
-function applicationWatcher(appName, eventType, appObject)
+local function applicationWatcher(appName, eventType, appObject)
     if (eventType == hs.application.watcher.activated) then
         updateFocusAppInputMethod()
     end

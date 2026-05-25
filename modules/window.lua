@@ -1,9 +1,15 @@
 hs.hotkey.bind(windowHotkey, 'return', function()
-    hs.grid.maximizeWindow()
+    local win = hs.window.focusedWindow()
+    if win then
+        hs.grid.maximizeWindow(win)
+    end
 end)
 
 hs.hotkey.bind(windowHotkey, 'F', function() 
-    hs.window.focusedWindow():toggleFullScreen()
+    local win = hs.window.focusedWindow()
+    if win then
+        win:toggleFullScreen()
+    end
 end)
 
 hs.hotkey.bind(windowHotkey, 'left', function()

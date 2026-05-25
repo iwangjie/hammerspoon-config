@@ -1,10 +1,27 @@
-function bluetoothSwitch(state)
-    -- state: 0(off), 1(on)
-    cmd = "/usr/local/bin/blueutil --power "..(state)
-    result = hs.osascript.applescript(string.format('do shell script "%s"', cmd))
+local function blueutilPath()
+    local candidates = {
+        "/opt/homebrew/bin/blueutil",
+        "/usr/local/bin/blueutil",
+    }
+
+    for _, path in ipairs(candidates) do
+        if hs.fs.attributes(path) then
+            return path
+        end
+    end
 end
 
-function caffeinateCallback(eventType)
+local function bluetoothSwitch(state)
+    local path = blueutilPath()
+    if not path then
+        print("blueutil is not installed; skipping Bluetooth power change")
+        return
+    end
+
+    hs.execute(path .. " --power " .. tostring(state), true)
+end
+
+local function caffeinateCallback(eventType)
     if (eventType == hs.caffeinate.watcher.screensDidSleep) then
       print("screensDidSleep")
     elseif (eventType == hs.caffeinate.watcher.screensDidWake) then
