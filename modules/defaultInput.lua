@@ -10,14 +10,10 @@ local function English()
     end
 end
 
-local function updateFocusAppInputMethod()
-    local win = hs.window.frontmostWindow()
-    if not win then return end
-
-    local appObject = win:application()
+local function updateAppInputMethod(appObject)
     if not appObject then return end
-
     local focusAppPath = appObject:path()
+
     for _, app in pairs(appInputMethod) do
         local appPath = app[1]
         local expectedIme = app[2]
@@ -54,7 +50,7 @@ end)
 -- Handle cursor focus and application's screen manage.
 local function applicationWatcher(appName, eventType, appObject)
     if (eventType == hs.application.watcher.activated) then
-        updateFocusAppInputMethod()
+        updateAppInputMethod(appObject)
     end
 end
 
