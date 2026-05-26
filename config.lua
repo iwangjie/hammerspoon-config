@@ -6,14 +6,6 @@ workWifi = nil
 outputDeviceName = 'MacBook Pro扬声器'
 englishInputSourceID = 'com.apple.keylayout.ABC'
 chineseInputSourceID = 'com.tencent.inputmethod.wetype.pinyin'
-sleepPreventSchedule = {
-    enabled = true,
-    startHour = 21,
-    startMinute = 30,
-    endHour = 5,
-    endMinute = 0,
-    weekdays = {2, 3, 4, 5, 6},
-}
 
 applist = {
     {shortcut = 'C',appname = 'Codex'},
@@ -21,7 +13,8 @@ applist = {
     {shortcut = 'E',appname = 'Microsoft Edge'},
     {shortcut = 'A',appname = 'Antigravity'},
     {shortcut = 'T',appname = 'Ghostty'},
-    {shortcut = 'X',appname = 'Xcode'},
+    {shortcut = 'B',appname = 'Sublime Text'},
+    {shortcut = 'I',appname = 'IntelliJ IDEA'},
     {shortcut = 'W',appname = 'WeChat'},
     {shortcut = 'Y',appname = '企业微信'},
     {shortcut = 'N',appname = '网易云音乐'},
