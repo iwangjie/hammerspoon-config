@@ -49,4 +49,6 @@ brew install blueutil
 
 ### 连接公司 Wi-Fi 自动静音
 
-修改配置文件中的 `workWifis` 为公司 Wi-Fi 名称列表。如果为空，则不会启用自动静音。当前配置为 `jishufuwuqi` 和 `SBY`，并且只会在当前输出设备为 `MacBook Pro扬声器` 时静音。
+修改配置文件中的 `workWifis` 为公司 Wi-Fi 名称列表。如果为空，则不会启用自动静音。当前配置为 `jishufuwuqi` 和 `SBY`，并且只会在当前输出设备为 `MacBook Pro扬声器` 时静音。SSID 变化后会等待一秒，确保 macOS 已更新当前网络状态再执行静音。
+
+macOS 将 Wi-Fi SSID 视为位置数据。首次启用时，Hammerspoon 会请求“定位服务”权限；请选择“允许”。若此前拒绝过，请在“系统设置 → 隐私与安全性 → 定位服务”中重新启用 Hammerspoon。
