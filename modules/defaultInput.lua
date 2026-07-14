@@ -13,12 +13,14 @@ end
 local function updateAppInputMethod(appObject)
     if not appObject then return end
     local focusAppPath = appObject:path()
+    local matched = false
 
     for _, app in pairs(appInputMethod) do
         local appPath = app[1]
         local expectedIme = app[2]
 
         if focusAppPath == appPath then
+            matched = true
             if expectedIme == 'English' then
                 English()
             else
@@ -26,6 +28,10 @@ local function updateAppInputMethod(appObject)
             end
             break
         end
+    end
+
+    if not matched then
+        Chinese()
     end
 end
 
