@@ -3,55 +3,45 @@
 ---
 --- 检测原理：直接向公司网关 http://10.10.10.1:8081/logout_info 发请求。
 --- 已认证时返回 UserName:王杰，需要认证时则返回不同内容（无此字段）。
---- 本地局域网请求不会被网关在上级路由白名单，比 captive.apple.com 可靠。
 ---
---- 所有 HTTP 请求均走 hs.http（macOS 原生 URL Loading System），
---- 用 Cookie 请求头模拟浏览器会话，与网关兼容性最好。
----
---- 检测到需要认证后，自动复刻浏览器抓包流程完成认证：
----   1. GET /?userip=...&usermac=...&info=
----   2. POST /login.html 提交登录表单
----
---- 自动认证 5 次失败后，退回打开系统 Captive Network Assistant 窗口。
---- 仅对 config.lua 中 workWifis 里的公司 Wi-Fi 生效。
+--- 注意：网关返回 GBK 编码，hs.http 和 hs.task 的 stdout 捕获都会在
+--- 编码转换时丢掉内容。因此所有 HTTP 请求都通过 hs.task + curl 写入
+--- 临时文件，再用 io.open("rb") 读取原始字节，绕过编码层。
 
 local M = {}
 
 -- ==================== 可调参数 ====================
 
--- 断网后的探测节奏（秒）：先密集探测，超限后进入慢速轮询
 local FAST_INTERVAL = 5
 local FAST_MAX_ATTEMPTS = 6
 local SLOW_INTERVAL = 60
 
--- 自动认证：最多尝试次数与两次尝试间隔（秒）
 local AUTO_AUTH_MAX_ATTEMPTS = 5
 local AUTO_AUTH_RETRY_INTERVAL = 10
--- POST 成功后等待网关放行的秒数
 local AUTH_SETTLE_DELAY = 3
 
--- 退回手动流程（打开登录窗口）后：复查间隔与次数
 local MANUAL_RETRY_INTERVAL = 15
 local MANUAL_MAX_ATTEMPTS = 12
 
--- 请求超时（秒）；hs.http 用 get 的最后一个参数 timeout
 local PROBE_TIMEOUT = 8
 
 local CNA_PATH = "/System/Library/CoreServices/Captive Network Assistant.app"
+local CURL = "/usr/bin/curl"
 local USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
 
 -- ==================== 状态 ====================
 
 local state = {
-  checking = false,       -- 防止重入
-  fastAttempts = 0,       -- 本次断网已做的密集探测次数
-  autoAuthAttempts = 0,   -- 自动认证已尝试次数
-  manualAttempts = 0,     -- 手动流程复查次数
-  checkTimer = nil,       -- 探测定时器
-  authRetryTimer = nil,   -- 认证失败后的重试定时器
-  cnaApp = nil,           -- Captive Network Assistant
-  cachedIp = "",          -- 缓存 IP/MAC，避免每次跑同步命令
+  checking = false,
+  fastAttempts = 0,
+  autoAuthAttempts = 0,
+  manualAttempts = 0,
+  checkTimer = nil,
+  authRetryTimer = nil,
+  pendingTask = nil,
+  cnaApp = nil,
+  cachedIp = "",
   cachedMac = "",
 }
 
@@ -87,39 +77,44 @@ local function stopAuthRetryTimer()
   end
 end
 
--- 门户登录所需的完整请求头（Cookie 会话 + UA + 来源）
-local function makeHeaders(referer)
-  local headers = {
-    ["User-Agent"] = USER_AGENT,
-  }
-  if creds and creds.loginCookie then
-    headers["Cookie"] = creds.loginCookie
+-- 用 hs.task 跑 curl，将输出写入临时文件，然后回调中读取原始字节。
+-- 这是唯一绕过 GBK 编码问题的方式：io.open("rb") 读原始字节，string.find 匹配 ASCII "UserName:"
+local function curlWriteToFile(args, callback)
+  -- 先将 args 整理成 curl 参数字符串
+  local tmpfile = os.tmpname() .. ".txt"
+  local fullArgs = {}
+  for _, a in ipairs(args) do
+    table.insert(fullArgs, a)
   end
-  if referer then
-    headers["Referer"] = referer
+  table.insert(fullArgs, "-o")
+  table.insert(fullArgs, tmpfile)
+
+  local task = hs.task.new(CURL, function(exitCode, stdout, stderr)
+    state.pendingTask = nil
+    -- 从临时文件读取原始字节
+    local content = ""
+    local f = io.open(tmpfile, "rb")
+    if f then
+      content = f:read("*a")
+      f:close()
+    end
+    -- 清理
+    pcall(os.remove, tmpfile)
+    if callback then callback(exitCode, content) end
+  end, fullArgs)
+
+  if not task then
+    log("Failed to create hs.task")
+    pcall(os.remove, tmpfile)
+    if callback then callback(-1, "") end
+    return nil
   end
-  return headers
+  state.pendingTask = task
+  task:start()
+  return task
 end
 
--- 异步 GET，callback(status, body)
-local function asyncGet(url, callback)
-  hs.http.asyncGet(url, makeHeaders(), function(status, body, headers)
-    callback(status, body)
-  end)
-end
-
--- 异步 POST，callback(status, body)
-local function asyncPost(url, extraHeaders, body, callback)
-  local headers = makeHeaders(nil)
-  for k, v in pairs(extraHeaders or {}) do
-    headers[k] = v
-  end
-  hs.http.asyncPost(url, body, headers, function(status, body, respHeaders)
-    callback(status, body)
-  end)
-end
-
--- 刷新 IP/MAC 缓存（SSID 变化时才调用）
+-- 刷新 IP/MAC 缓存
 local function refreshIfaceInfo()
   state.cachedIp = hs.execute("ipconfig getifaddr en0 2>/dev/null"):gsub("%s+", "")
   state.cachedMac = hs.execute("ifconfig en0 2>/dev/null | awk '/ether/{print $2}'"):gsub(":", ""):gsub("%s+", "")
@@ -139,22 +134,45 @@ local function getProbeUrl()
   return "http://captive.apple.com/hotspot-detect.html"
 end
 
+local function httpGet(url, callback)
+  curlWriteToFile({
+    "--max-time", tostring(PROBE_TIMEOUT), "--insecure", "-s",
+    "-H", "Cookie: " .. creds.loginCookie,
+    "-A", USER_AGENT,
+    url
+  }, callback)
+end
+
+local function httpPost(url, data, callback)
+  curlWriteToFile({
+    "--max-time", tostring(PROBE_TIMEOUT), "--insecure", "-s",
+    "-X", "POST",
+    "-H", "Content-Type: application/x-www-form-urlencoded",
+    "-H", "Origin: " .. creds.portalBase,
+    "-H", "Cookie: " .. creds.loginCookie,
+    "-A", USER_AGENT,
+    "--data-raw", data,
+    url
+  }, callback)
+end
+
 -- ==================== 探测 ====================
 
--- 探测网络状态：返回 "online" / "captive" / "offline"
--- 有 portalBase 时用 /logout_info（带 Cookie/UA，识别会话），返回 UserName: 即已认证
--- 否则用 captive.apple.com（返回 Success 即在线）
 local function probeOnce(callback)
   local probeUrl = getProbeUrl()
 
   if creds and creds.portalBase and probeUrl:find(creds.portalBase, 1, true) then
-    asyncGet(probeUrl, function(status, body)
-      if status == 200 and body and body:find("UserName:", 1, true) then
-        callback("online")
-      elseif status == 200 then
-        callback("captive")
-      else
+    httpGet(probeUrl, function(exitCode, body)
+      log("probe exit=" .. tostring(exitCode) .. " bodyLen=" .. tostring(#body)
+        .. " hasUserName=" .. tostring(body:find("UserName:", 1, true) and true or false))
+      if exitCode ~= 0 then
         callback("offline")
+        return
+      end
+      if body:find("UserName:", 1, true) then
+        callback("online")
+      else
+        callback("captive")
       end
     end)
     return
@@ -171,7 +189,6 @@ local function probeOnce(callback)
   end)
 end
 
--- 带一次重试的探测：瞬态失败时自动重试，避免误判
 local function probeNetwork(callback)
   probeOnce(function(result)
     if result ~= "offline" then
@@ -203,7 +220,6 @@ local function closeCaptiveAssistant()
   state.cnaApp = nil
 end
 
--- 打开登录窗口后周期复查，直到 online 或超限
 local function recheckUntilOnline(tag)
   probeNetwork(function(result)
     if result == "online" then
@@ -265,7 +281,6 @@ local function autoAuthDone(result)
   end)
 end
 
--- 一轮自动认证：GET 门户页（带 userip/usermac）→ POST 登录 → 等待放行 → 复查
 function M.attemptAutoAuth()
   if not creds then
     state.checking = false
@@ -295,19 +310,12 @@ function M.attemptAutoAuth()
   local portalURL = creds.portalBase .. "/?userip=" .. ip .. "&usermac=" .. mac .. "&info="
 
   -- 第一步：GET 门户页
-  asyncGet(portalURL, function(status, body)
-    if status ~= 200 then log("Portal GET status=" .. tostring(status)) end
+  httpGet(portalURL, function(exitCode, body)
+    if exitCode ~= 0 then log("Portal GET exit=" .. exitCode) end
 
     -- 第二步：POST 登录表单
-    local postBody = creds.loginBody
-    asyncPost(creds.portalBase .. "/login.html", {
-      ["Content-Type"] = "application/x-www-form-urlencoded",
-      ["Origin"] = creds.portalBase,
-      ["Referer"] = portalURL,
-    }, postBody, function(postStatus, postBody)
-      if postStatus ~= 302 and postStatus ~= 200 then
-        log("Login POST status=" .. tostring(postStatus))
-      end
+    httpPost(creds.portalBase .. "/login.html", creds.loginBody, function(postExit, postBody)
+      if postExit ~= 0 then log("Login POST exit=" .. postExit) end
       -- 第三步：等网关放行后复查
       hs.timer.doAfter(AUTH_SETTLE_DELAY, function()
         probeNetwork(autoAuthDone)
@@ -337,7 +345,6 @@ end
 
 -- ==================== 断网检测 ====================
 
--- 慢速轮询定时器（密集阶段未恢复时降级）
 local function createSlowPollTimer()
   state.checkTimer = hs.timer.doEvery(SLOW_INTERVAL, function()
     if state.checking then return end
@@ -400,7 +407,6 @@ local function startCheck()
         return
       end
 
-      -- offline：密集阶段结束后转慢速轮询
       if state.fastAttempts >= FAST_MAX_ATTEMPTS then
         if state.checkTimer then
           state.checkTimer:stop()
@@ -435,7 +441,6 @@ end
 
 function M.onNetworkMaybeChanged()
   if not isWorkWifi(hs.wifi.currentNetwork()) then return end
-  -- SSID 变化说明网卡可能重新分配了 IP，刷新缓存
   refreshIfaceInfo()
   hs.timer.doAfter(2, function()
     if state.checkTimer or state.authRetryTimer or state.checking then return end
@@ -462,7 +467,6 @@ sleepCaptiveWatcher = hs.caffeinate.watcher.new(function(event)
 end)
 sleepCaptiveWatcher:start()
 
--- 兜底：每 1 分钟检查一次，覆盖退出认证但 SSID 未变的情况
 backgroundCaptiveTimer = hs.timer.doEvery(60, function()
   if state.checkTimer or state.authRetryTimer or state.checking then return end
   if not isWorkWifi(hs.wifi.currentNetwork()) then return end
