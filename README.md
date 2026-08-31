@@ -87,8 +87,10 @@ Wi-Fi 中断重连后如果网关弹出认证页（Captive Portal），自动检
 
 ```json
 {
+    "enabled": true,
     "app": {
-        "uuremote": "running"
+        "uuremote": "running",
+        "zcode": "running"
     },
     "sys": {
         "brightness": 20,
@@ -99,7 +101,10 @@ Wi-Fi 中断重连后如果网关弹出认证页（Captive Portal），自动检
 
 目前支持：
 
+* `enabled`：总开关。`false` 时电脑不再解析、对齐 `app` / `sys`，轮询降到约 120 秒只看这个字段。缺省视为 `true`。
+
 * `app.uuremote`：`running` 或 `stopped`。只看界面进程 `UURemote`，已经符合期望则不动，也不改 launchd。关掉时对除 `UURemoteDaemon` 以外的 UU 进程发 `SIGKILL`（普通退出会被拦成确认框）。UU 卡住时先写成 `stopped`，等日志确认后再改回 `running`。
+* `app.zcode`：`running` 或 `stopped`。只看 `/Applications/ZCode.app` 主进程。关掉时 SIGKILL 应用本体和 Computer Use helper，不碰 launchd。
 * `sys.brightness`：0–100 的整数。
 * `sys.caffeinate`：`running` 或 `stopped`。开启后挂一个 `caffeinate -dims` 进程，并加上 Hammerspoon 的防休眠 assertion。盖上盖子后系统仍可能睡；接电源时被唤醒后会尽量保持不休眠。`hs.reload()` 会丢掉 assertion，但会认已经在跑的 `caffeinate` 进程，对齐了不会再开一份。
 

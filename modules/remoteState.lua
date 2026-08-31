@@ -3,7 +3,8 @@
 ---
 --- 期望状态示例：
 --- {
----     "app": { "uuremote": "running" },
+---     "enabled": true,
+---     "app": { "uuremote": "running", "zcode": "running" },
 ---     "sys": { "brightness": 20, "caffeinate": "running" }
 --- }
 ---
@@ -19,6 +20,7 @@ local REPO = remoteStateRepo or "mac-remote-state"
 local DESIRED_PATH = remoteStateDesiredPath or "desired.json"
 local LOG_PATH = remoteStateLogPath or "log.md"
 local INTERVAL = tonumber(remoteStateInterval) or 20
+local IDLE_INTERVAL = tonumber(remoteStateIdleInterval) or 120
 local API_VERSION = "2022-11-28"
 local MAX_LOG_LINES = 80
 local PARSE_ERROR_COOLDOWN = 120
@@ -35,6 +37,7 @@ local state = {
   lastParseErrorAt = 0,
   caffeinateTask = nil,
   brightnessSettled = nil,
+  syncEnabled = true,
 }
 
 local function log(text)
@@ -232,6 +235,17 @@ local function decodeDesired(text)
   return data, nil
 end
 
+-- 缺省视为开启，兼容还没有 enabled 字段的 JSON。
+local function isSyncEnabled(desired)
+  if type(desired) ~= "table" then return true end
+  local v = desired.enabled
+  if v == nil then return true end
+  if v == false or v == 0 or v == "false" or v == "off" or v == "stopped" then
+    return false
+  end
+  return true
+end
+
 -- 只看界面进程 UURemote。不碰 launchd，也不杀 UURemoteDaemon。
 local function isUURemoteRunning()
   local out = hs.execute("/usr/bin/pgrep -x UURemote") or ""
@@ -268,6 +282,46 @@ local function setUURemote(desired)
   if desired == "stopped" then
     if not running then return false, "already stopped" end
     killUURemoteExceptDaemon()
+    return true, "stopped"
+  end
+
+  return false, "unsupported value " .. tostring(desired)
+end
+
+local function isZCodeRunning()
+  local app = hs.application.get("dev.zcode.app")
+  if app and app:isRunning() then
+    return true
+  end
+  local out = hs.execute("/usr/bin/pgrep -f '/Applications/ZCode.app/Contents/MacOS/ZCode'") or ""
+  return out:match("%d") ~= nil
+end
+
+local function killZCode()
+  local out = hs.execute("/bin/ps -axo pid=,command=") or ""
+  for line in out:gmatch("[^\n]+") do
+    if line:find("/Applications/ZCode.app/", 1, true)
+        or line:find("/.zcode/computer-use/ZCode Computer Use.app/", 1, true) then
+      local pid = line:match("^%s*(%d+)")
+      if pid then
+        hs.execute("/bin/kill -9 " .. pid .. " >/dev/null 2>&1", true)
+      end
+    end
+  end
+end
+
+local function setZCode(desired)
+  local running = isZCodeRunning()
+
+  if desired == "running" then
+    if running then return false, "already running" end
+    hs.application.launchOrFocus("ZCode")
+    return true, "started"
+  end
+
+  if desired == "stopped" then
+    if not running then return false, "already stopped" end
+    killZCode()
     return true, "stopped"
   end
 
@@ -426,20 +480,23 @@ local function reconcile(desired)
 
   local appSpec = desired.app
   if type(appSpec) == "table" then
-    local uu = appSpec.uuremote
-    if uu ~= nil then
-      if uu ~= "running" and uu ~= "stopped" then
-        table.insert(changes, "uuremote: 忽略非法值 " .. tostring(uu))
+    local function applyApp(key, setter, label)
+      local value = appSpec[key]
+      if value == nil then return end
+      if value ~= "running" and value ~= "stopped" then
+        table.insert(changes, key .. ": 忽略非法值 " .. tostring(value))
+        return
+      end
+      local applied, detail = setter(value)
+      if applied then
+        table.insert(changes, key .. ": " .. detail)
+        notify(label .. "已" .. (value == "running" and "启动" or "关闭"))
       else
-        local applied, detail = setUURemote(uu)
-        if applied then
-          table.insert(changes, "uuremote: " .. detail)
-          notify("UU 远程桌面已" .. (uu == "running" and "启动" or "关闭"))
-        else
-          log("uuremote noop: " .. tostring(detail))
-        end
+        log(key .. " noop: " .. tostring(detail))
       end
     end
+    applyApp("uuremote", setUURemote, "UU 远程桌面")
+    applyApp("zcode", setZCode, "ZCode")
   end
 
   local sysSpec = desired.sys
@@ -517,6 +574,41 @@ local function tick()
       state.cachedDesired = parsed
     end
 
+    local enabled = isSyncEnabled(desired)
+    if enabled ~= state.syncEnabled then
+      state.syncEnabled = enabled
+      if state.timer then state.timer:stop() end
+      state.timer = hs.timer.doEvery(enabled and INTERVAL or IDLE_INTERVAL, tick)
+      log(enabled
+        and ("sync resumed, polling every " .. tostring(INTERVAL) .. "s")
+        or ("sync paused, polling every " .. tostring(IDLE_INTERVAL) .. "s"))
+      if not enabled then
+        appendLog({ "sync: paused" }, function()
+          state.busy = false
+        end)
+        return
+      end
+      appendLog({ "sync: resumed" }, function()
+        local changes = reconcile(desired)
+        if #changes == 0 then
+          state.busy = false
+          return
+        end
+        for _, line in ipairs(changes) do
+          log(line)
+        end
+        appendLog(changes, function()
+          state.busy = false
+        end)
+      end)
+      return
+    end
+
+    if not enabled then
+      state.busy = false
+      return
+    end
+
     local changes = reconcile(desired)
     if #changes == 0 then
       state.busy = false
@@ -539,11 +631,19 @@ end
 
 function M.status()
   local uu = isUURemoteRunning() and "running" or "stopped"
+  local zcode = isZCodeRunning() and "running" or "stopped"
   local caffeinate = isCaffeinateRunning() and "running" or "stopped"
   local brightness = currentBrightness()
-  log("actual uuremote=" .. uu .. " caffeinate=" .. caffeinate
+  log("sync=" .. (state.syncEnabled and "on" or "off")
+    .. " actual uuremote=" .. uu .. " zcode=" .. zcode .. " caffeinate=" .. caffeinate
     .. " brightness=" .. tostring(brightness) .. " repo=" .. OWNER .. "/" .. REPO)
-  return { uuremote = uu, caffeinate = caffeinate, brightness = brightness }
+  return {
+    enabled = state.syncEnabled,
+    uuremote = uu,
+    zcode = zcode,
+    caffeinate = caffeinate,
+    brightness = brightness,
+  }
 end
 
 state.timer = hs.timer.doEvery(INTERVAL, tick)
