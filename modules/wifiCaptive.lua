@@ -232,17 +232,14 @@ local function onStatusChanged(result, source)
   local prev = state.prevStatus
   state.prevStatus = result
 
-  -- 首次加载时 prev 为 nil，跳过推送（避免加载时误报"已恢复"）
+  -- 首次加载跳过推送
   if prev == nil then return end
-  -- 状态没变，不重复推送
+  -- 状态没变不重复推送
   if prev == result then return end
 
+  -- 只在恢复联网时推送：断网/需要认证时外网不通，发也发不出去
   if result == "online" then
     pushEvent("Wi-Fi 已恢复", source and ("网络状态变为在线（" .. source .. "）") or "网络状态变为在线")
-  elseif result == "offline" then
-    pushEvent("Wi-Fi 已断开", source and ("检测到断网（" .. source .. "）") or "检测到断网")
-  elseif result == "captive" then
-    pushEvent("Wi-Fi 需要认证", source and ("网关要求认证（" .. source .. "）") or "网关要求认证")
   end
 end
 
