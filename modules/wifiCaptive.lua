@@ -27,6 +27,7 @@ local PROBE_TIMEOUT = 8
 
 local CNA_PATH = "/System/Library/CoreServices/Captive Network Assistant.app"
 local CURL = "/usr/bin/curl"
+local PROBE_APPLE_URL = "http://captive.apple.com/hotspot-detect.html"
 local USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
 
@@ -43,6 +44,7 @@ local state = {
   cnaApp = nil,
   cachedIp = "",
   cachedMac = "",
+  prevStatus = nil,      -- 上次探测结果，用于检测状态变化推送到手机
 }
 
 -- 门户凭据
@@ -50,6 +52,15 @@ local okCreds, creds = pcall(dofile, hs.configdir .. "/private/captive.lua")
 if not okCreds or type(creds) ~= "table" or not creds.portalBase or not creds.loginBody then
   creds = nil
 end
+
+-- 推送配置
+local okPush, pushConfig = pcall(dofile, hs.configdir .. "/private/push.lua")
+if not okPush or type(pushConfig) ~= "table" or not pushConfig.url then
+  pushConfig = nil
+end
+
+-- 去重：同一标题 30 秒内不重复推送
+local pushDedup = { title = "", time = 0 }
 
 -- ==================== 工具函数 ====================
 
@@ -68,6 +79,23 @@ end
 
 local function log(text)
   print("[wifiCaptive] " .. text)
+end
+
+local function pushEvent(title, content)
+  if not pushConfig then return end
+  local now = hs.timer.secondsSinceEpoch()
+  if title == pushDedup.title and (now - pushDedup.time) < 30 then return end
+  pushDedup.title = title
+  pushDedup.time = now
+  log("push: " .. title .. " - " .. content)
+  local task = hs.task.new(CURL, function() end, {
+    "-s", "--max-time", "5",
+    "-X", "POST", pushConfig.url,
+    "--data-urlencode", "title=" .. title,
+    "--data-urlencode", "content=" .. content,
+    "--data-urlencode", "channel=" .. pushConfig.channel,
+  })
+  if task then task:start() end
 end
 
 local function stopAuthRetryTimer()
@@ -158,6 +186,19 @@ end
 
 -- ==================== 探测 ====================
 
+-- 用 captive.apple.com 做二次探测：返回 "online" / "captive" / "offline"
+local function probeApple(callback)
+  hs.http.asyncGet(PROBE_APPLE_URL, nil, function(status, body, headers)
+    if status == 200 and body and body:find("Success", 1, true) then
+      callback("online")
+    elseif status == 200 then
+      callback("captive")
+    else
+      callback("offline")
+    end
+  end)
+end
+
 local function probeOnce(callback)
   local probeUrl = getProbeUrl()
 
@@ -174,31 +215,48 @@ local function probeOnce(callback)
       elseif connectionOk then
         callback("captive")
       else
-        -- 真正连不上：超时(28)、连接被拒(7)、无法解析(6)等 → offline
-        callback("offline")
+        -- hs.task 子进程有时连不上网关（exit=7），但终端手动 curl 能通。
+        -- 此时降级到 captive.apple.com 二次判断，避免误判为 offline。
+        probeApple(function(result)
+          callback(result)
+        end)
       end
     end)
     return
   end
 
-  hs.http.asyncGet(probeUrl, nil, function(status, body, headers)
-    if status == 200 and body and body:find("Success", 1, true) then
-      callback("online")
-    elseif status == 200 then
-      callback("captive")
-    else
-      callback("offline")
-    end
-  end)
+  probeApple(callback)
+end
+
+local function onStatusChanged(result, source)
+  local prev = state.prevStatus
+  state.prevStatus = result
+
+  -- 首次加载时 prev 为 nil，跳过推送（避免加载时误报"已恢复"）
+  if prev == nil then return end
+  -- 状态没变，不重复推送
+  if prev == result then return end
+
+  if result == "online" then
+    pushEvent("Wi-Fi 已恢复", source and ("网络状态变为在线（" .. source .. "）") or "网络状态变为在线")
+  elseif result == "offline" then
+    pushEvent("Wi-Fi 已断开", source and ("检测到断网（" .. source .. "）") or "检测到断网")
+  elseif result == "captive" then
+    pushEvent("Wi-Fi 需要认证", source and ("网关要求认证（" .. source .. "）") or "网关要求认证")
+  end
 end
 
 local function probeNetwork(callback)
   probeOnce(function(result)
     if result ~= "offline" then
+      onStatusChanged(result)
       callback(result)
       return
     end
-    probeOnce(callback)
+    probeOnce(function(result2)
+      onStatusChanged(result2)
+      callback(result2)
+    end)
   end)
 end
 
