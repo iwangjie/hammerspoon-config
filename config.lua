@@ -6,6 +6,9 @@ workWifi = nil
 outputDeviceName = 'MacBook Pro扬声器'
 englishInputSourceID = 'com.apple.keylayout.ABC'
 chineseInputSourceID = 'com.tencent.inputmethod.wetype.pinyin'
+remoteStateUrl = 'https://note.ms/13373381619'
+remoteStateLogUrl = 'https://note.ms/13373381619log'
+remoteStateInterval = 20
 
 applist = {
     {shortcut = 'C',appname = 'Codex'},

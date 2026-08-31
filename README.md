@@ -76,3 +76,29 @@ Wi-Fi 中断重连后如果网关弹出认证页（Captive Portal），自动检
 ### 外接或投屏显示器隐私保护
 
 连接任意第二块显示器（包括投屏、屏幕镜像和扩展桌面）时，也会启用微信隐藏。检测器只响应 `hs.screen.watcher` 的显示器布局变化事件，延迟 0.2 秒等待 macOS 完成布局更新后读取屏幕数量，不进行轮询。
+
+### 远程期望状态（note.ms）
+
+电脑周期性拉取 [note.ms](https://note.ms/13373381619) 上的 JSON，当作期望状态，把本机拉齐（类似 k8s reconcile）。未写的字段不管。实际发生的改动会追加到 [日志页](https://note.ms/13373381619log)。
+
+把命令页改成例如：
+
+```json
+{
+    "app": {
+        "uuremote": "running"
+    },
+    "sys": {
+        "brightness": 20
+    }
+}
+```
+
+目前支持：
+
+* `app.uuremote`：`running` 或 `stopped`。已经符合期望则不动；UU 卡住时先写成 `stopped`，等日志确认后再改回 `running`。
+* `sys.brightness`：0–100 的整数。
+
+默认每 20 秒检查一次，可在 `config.lua` 里改 `remoteStateUrl` / `remoteStateLogUrl` / `remoteStateInterval`。Hammerspoon 控制台可执行 `remoteState.reconcileNow()` 立即对齐，或 `remoteState.status()` 看本机当前值。
+
+这会覆盖定时开关 UU（每天 06:00 打开、10:00 关掉）：只要远程还写着 `running`，10:00 杀掉之后最多 20 秒又会被拉起来。想让定时任务说了算，就把远程里的 `uuremote` 删掉。
