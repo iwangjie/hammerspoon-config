@@ -165,14 +165,17 @@ local function probeOnce(callback)
     httpGet(probeUrl, function(exitCode, body)
       log("probe exit=" .. tostring(exitCode) .. " bodyLen=" .. tostring(#body)
         .. " hasUserName=" .. tostring(body:find("UserName:", 1, true) and true or false))
-      if exitCode ~= 0 then
-        callback("offline")
-        return
-      end
-      if body:find("UserName:", 1, true) then
+      -- curl exit 码：0 成功；52 = CURLE_GOT_NOTHING（连接成功但响应为空）
+      -- 对锐捷 ePortal，未认证时网关对 logout_info 就返回空响应（exit=52）。
+      -- 因此只要请求能到达网关（连接层成功），响应里没有 UserName: 就视为 captive。
+      local connectionOk = (exitCode == 0) or (exitCode == 52)
+      if connectionOk and body:find("UserName:", 1, true) then
         callback("online")
-      else
+      elseif connectionOk then
         callback("captive")
+      else
+        -- 真正连不上：超时(28)、连接被拒(7)、无法解析(6)等 → offline
+        callback("offline")
       end
     end)
     return
