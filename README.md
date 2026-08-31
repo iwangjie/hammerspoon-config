@@ -53,6 +53,20 @@ brew install blueutil
 
 macOS 将 Wi-Fi SSID 视为位置数据。首次启用时，Hammerspoon 会请求“定位服务”权限；请选择“允许”。若此前拒绝过，请在“系统设置 → 隐私与安全性 → 定位服务”中重新启用 Hammerspoon。
 
+### Wi-Fi 断网自动认证
+
+Wi-Fi 中断重连后如果网关弹出认证页（Captive Portal），自动检测并完成认证。仅对 `workWifis` 中的公司 Wi-Fi 生效，在家或热点网络不会触发。
+
+检测原理：直接向公司网关 `http://10.10.10.1:8081/logout_info` 发请求，已认证时返回 `UserName:王杰`，退出认证后则不再返回该字段。这是本地局域网请求，不会被网关在上级路由白名单，比 `captive.apple.com` 可靠。触发时机：
+
+* Wi-Fi SSID 变化（断开重连）后 2 秒开始探测，先每 5 秒一次共 6 次，仍未恢复则转为每 60 秒慢速轮询
+* 休眠唤醒后检查一次
+* 兜底每 2 分钟检查一次（覆盖退出认证但 SSID 未变的情况——这是最关键的一条路径）
+
+检测到需要认证后，如果配置了门户凭据（`private/captive.lua`，按锐捷 ePortal 抓包格式：GET `/?userip=…&usermac=…` 后 POST `/login.html`），会直接复刻该请求完成自动认证，成功后发通知；凭据未配置或自动认证 5 次未成功时，退回打开系统自带登录窗口，之后每 15 秒复查一次是否已放行，认证成功自动关闭窗口。也可以在 Hammerspoon 控制台执行 `wifiCaptive.checkNow()` 手动检查。
+
+`private/` 目录已被 git 忽略，凭据不会提交到仓库；换密码或换网络时修改该文件即可。
+
 ### 企业微信会议屏幕共享检测
 
 检测器仅在企业微信会议运行时扫描一次辅助功能树，并通过辅助功能事件更新状态，不进行定时轮询。`meetingScreenShare.isSharing` 表示是否正在共享；状态变化时会发送通知，并保存到 Hammerspoon 设置的 `meetingScreenSharing` 键中。
