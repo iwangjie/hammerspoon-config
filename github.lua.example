@@ -1,0 +1,7 @@
+-- 复制到 private/github.lua（private/ 已被 gitignore）。
+-- 给 Hammerspoon 读/写 iwangjie/mac-remote-state。
+-- 优先用 fine-grained PAT：只勾这个仓库，Contents = Read and write。
+-- 不配的话会尝试 `gh auth token`（菜单栏启动的 Hammerspoon 有时读不到钥匙串）。
+return {
+  token = "github_pat_xxxxxxxx",
+}
