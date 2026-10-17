@@ -28,7 +28,7 @@ end
 local function scheduleUpdate()
     if refreshTimer then return end
 
-    refreshTimer = timer.doAfter(0.2, updatePresentingState)
+    refreshTimer = timer.doAfter(0.5, updatePresentingState)
 end
 
 function module:subscribe(identifier, callback)

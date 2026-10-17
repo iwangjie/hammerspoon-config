@@ -99,7 +99,7 @@ end
 local function scheduleRefresh()
     if refreshTimer then return end
 
-    refreshTimer = timer.doAfter(0.1, refreshSharingState)
+    refreshTimer = timer.doAfter(0.5, refreshSharingState)
 end
 
 local function startObserver()
